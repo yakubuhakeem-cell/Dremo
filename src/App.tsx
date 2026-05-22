@@ -54,56 +54,61 @@ export default function App() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('offline');
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<(User & { isLocalSandbox?: boolean }) | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
-  // Sync back to local storage only if offline/unauthenticated to retain user's pre-login edits
+  const isCloudSynced = currentUser && !currentUser.isLocalSandbox;
+
+  // Sync back to local storage only if offline/unauthenticated/sandboxed to retain edits
   useEffect(() => {
-    if (!currentUser) {
+    if (!isCloudSynced) {
       try {
         safeStorage.setItem('dremo_products', JSON.stringify(products));
       } catch (e) {
         console.warn("Failed to set products in storage:", e);
       }
     }
-  }, [products, currentUser]);
+  }, [products, isCloudSynced]);
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!isCloudSynced) {
       try {
         safeStorage.setItem('dremo_categories', JSON.stringify(categories));
       } catch (e) {
         console.warn("Failed to set categories in storage:", e);
       }
     }
-  }, [categories, currentUser]);
+  }, [categories, isCloudSynced]);
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!isCloudSynced) {
       try {
         safeStorage.setItem('dremo_transactions', JSON.stringify(transactions));
       } catch (e) {
         console.warn("Failed to set transactions in storage:", e);
       }
     }
-  }, [transactions, currentUser]);
+  }, [transactions, isCloudSynced]);
 
-  // Firebase auth state observer
+  // Firebase auth state observer (only active if not in virtual local sandbox)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
       if (user) {
+        setCurrentUser(user);
         setSyncStatus('synced');
       } else {
-        setSyncStatus('offline');
+        setCurrentUser(prev => prev?.isLocalSandbox ? prev : null);
+        if (!currentUser?.isLocalSandbox) {
+          setSyncStatus('offline');
+        }
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [currentUser?.isLocalSandbox]);
 
   // Products synchronization listener
   useEffect(() => {
-    if (!currentUser) {
+    if (!isCloudSynced) {
       try {
         const local = safeStorage.getItem('dremo_products');
         setProducts(local ? JSON.parse(local) : INITIAL_PRODUCTS);
@@ -138,11 +143,11 @@ export default function App() {
     });
 
     return () => unsub();
-  }, [currentUser]);
+  }, [isCloudSynced]);
 
   // Categories synchronization listener
   useEffect(() => {
-    if (!currentUser) {
+    if (!isCloudSynced) {
       try {
         const local = safeStorage.getItem('dremo_categories');
         setCategories(local ? JSON.parse(local) : ['Cafe', 'Workspace', 'Goods']);
@@ -177,11 +182,11 @@ export default function App() {
     });
 
     return () => unsub();
-  }, [currentUser]);
+  }, [isCloudSynced]);
 
   // Transactions database listener
   useEffect(() => {
-    if (!currentUser) {
+    if (!isCloudSynced) {
       try {
         const local = safeStorage.getItem('dremo_transactions');
         setTransactions(local ? JSON.parse(local) : []);
@@ -207,7 +212,7 @@ export default function App() {
     });
 
     return () => unsub();
-  }, [currentUser]);
+  }, [isCloudSynced]);
 
   // User auth action triggers
   const handleLogin = () => {
@@ -226,16 +231,21 @@ export default function App() {
     }
   };
 
-  const handleAuthSuccess = (user: User) => {
+  const handleAuthSuccess = (user: any) => {
     setCurrentUser(user);
-    setSyncStatus('synced');
+    setSyncStatus(user.isLocalSandbox ? 'offline' : 'synced');
   };
 
   const handleLogout = async () => {
     try {
       setSyncStatus('syncing');
-      await signOut(auth);
-      setSyncStatus('offline');
+      if (currentUser?.isLocalSandbox) {
+        setCurrentUser(null);
+        setSyncStatus('offline');
+      } else {
+        await signOut(auth);
+        setSyncStatus('offline');
+      }
     } catch (e) {
       console.error("Log out error: ", e);
     }
@@ -246,7 +256,7 @@ export default function App() {
     const trimmed = name.trim();
     if (!trimmed) return;
 
-    if (currentUser) {
+    if (isCloudSynced) {
       setSyncStatus('syncing');
       const path = 'categories';
       try {
@@ -266,7 +276,7 @@ export default function App() {
     const trimmedNew = newName.trim();
     if (!oldName || !trimmedNew || oldName === trimmedNew) return;
 
-    if (currentUser) {
+    if (isCloudSynced) {
       setSyncStatus('syncing');
       try {
         await setDoc(doc(db, 'categories', trimmedNew), { id: trimmedNew, name: trimmedNew });
@@ -286,7 +296,7 @@ export default function App() {
   };
 
   const deleteCategory = async (categoryName: string) => {
-    if (currentUser) {
+    if (isCloudSynced) {
       setSyncStatus('syncing');
       try {
         const matching = products.filter(p => p.category === categoryName);
@@ -412,7 +422,7 @@ export default function App() {
       excelRowIndex: nextRowIndex
     };
 
-    if (currentUser) {
+    if (isCloudSynced) {
       setSyncStatus('syncing');
       try {
         await setDoc(doc(db, 'transactions', newTx.id), newTx);
@@ -446,7 +456,7 @@ export default function App() {
     const pid = `p-${Date.now()}`;
     const productData: Product = { ...newP, id: pid };
 
-    if (currentUser) {
+    if (isCloudSynced) {
       setSyncStatus('syncing');
       try {
         await setDoc(doc(db, 'products', pid), productData);
@@ -460,7 +470,7 @@ export default function App() {
 
   const updateStock = async (productId: string, newStock: number) => {
     const val = Math.max(0, newStock);
-    if (currentUser) {
+    if (isCloudSynced) {
       setSyncStatus('syncing');
       try {
         const target = products.find(p => p.id === productId);
@@ -478,7 +488,7 @@ export default function App() {
   };
 
   const updateProduct = async (updatedP: Product) => {
-    if (currentUser) {
+    if (isCloudSynced) {
       setSyncStatus('syncing');
       try {
         await setDoc(doc(db, 'products', updatedP.id), updatedP);
@@ -491,7 +501,7 @@ export default function App() {
   };
 
   const deleteProduct = async (productId: string) => {
-    if (currentUser) {
+    if (isCloudSynced) {
       setSyncStatus('syncing');
       try {
         await deleteDoc(doc(db, 'products', productId));

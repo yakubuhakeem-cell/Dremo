@@ -9,7 +9,9 @@ import {
   ShieldAlert, 
   CheckCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  RefreshCw,
+  Compass
 } from 'lucide-react';
 import { 
   auth, 
@@ -28,6 +30,30 @@ interface AuthModalProps {
   onGoogleSignIn: () => Promise<void>;
 }
 
+// Local storage interfaces for offline terminal testing
+interface LocalCashier {
+  email: string;
+  name: string;
+  passwordHash: string;
+}
+
+const getLocalCashiers = (): LocalCashier[] => {
+  try {
+    const data = localStorage.getItem('dremo_local_cashiers');
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveLocalCashiers = (list: LocalCashier[]) => {
+  try {
+    localStorage.setItem('dremo_local_cashiers', JSON.stringify(list));
+  } catch (e) {
+    console.warn("localStorage write error", e);
+  }
+};
+
 export default function AuthModal({ isOpen, onClose, onAuthSuccess, onGoogleSignIn }: AuthModalProps) {
   const [mode, setMode] = useState<'signin' | 'register'>('signin');
   const [email, setEmail] = useState('');
@@ -37,6 +63,10 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, onGoogleSign
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  
+  // Sandbox mode detection & activation switches
+  const [isSandboxMode, setIsSandboxMode] = useState(false);
+  const [showSandboxOption, setShowSandboxOption] = useState(false);
 
   if (!isOpen) return null;
 
@@ -56,6 +86,67 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, onGoogleSign
     }
     if (password.length < 6) {
       setError("Password must be at least 6 characters long for cloud security.");
+      setLoading(false);
+      return;
+    }
+
+    // Process using offline backup sandbox if enabled
+    if (isSandboxMode) {
+      const list = getLocalCashiers();
+      if (mode === 'register') {
+        if (!displayNameTrimmed) {
+          setError("Please state the Cashier's Display Name.");
+          setLoading(false);
+          return;
+        }
+
+        const existing = list.find(c => c.email.toLowerCase() === emailTrimmed.toLowerCase());
+        if (existing) {
+          setError("This e-mail is already registered for a local sandbox operator.");
+          setLoading(false);
+          return;
+        }
+
+        const newCashier: LocalCashier = {
+          email: emailTrimmed,
+          name: displayNameTrimmed,
+          passwordHash: password
+        };
+        list.push(newCashier);
+        saveLocalCashiers(list);
+
+        setSuccessMsg(`Operator account for "${displayNameTrimmed}" registered successfully (Local Sandbox)!`);
+        
+        setTimeout(() => {
+          onAuthSuccess({
+            uid: `sandbox-${emailTrimmed}`,
+            displayName: displayNameTrimmed,
+            email: emailTrimmed,
+            isLocalSandbox: true
+          } as any as User);
+          onClose();
+        }, 1500);
+      } else {
+        // Local Sign In
+        const cashier = list.find(c => c.email.toLowerCase() === emailTrimmed.toLowerCase() && c.passwordHash === password);
+        if (!cashier) {
+          setError("Incorrect email address or password for Local Sandbox cashier profile.");
+          setLoading(false);
+          return;
+        }
+
+        setSuccessMsg(`Welcome back, Cashier ${cashier.name}! (Local Sandbox)`);
+        
+        setTimeout(() => {
+          onAuthSuccess({
+            uid: `sandbox-${emailTrimmed}`,
+            displayName: cashier.name,
+            email: emailTrimmed,
+            isLocalSandbox: true
+          } as any as User);
+          onClose();
+        }, 1200);
+      }
       setLoading(false);
       return;
     }
@@ -96,7 +187,11 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, onGoogleSign
     } catch (err: any) {
       console.error("Authentication Error: ", err);
       let localizedError = "Authentication failed. Please verify credentials and network link.";
-      if (err.code === 'auth/email-already-in-use') {
+      
+      if (err.code === 'auth/operation-not-allowed') {
+        localizedError = "Email/Password sign-ins are not yet enabled in this Firebase dashboard.";
+        setShowSandboxOption(true);
+      } else if (err.code === 'auth/email-already-in-use') {
         localizedError = "This e-mail is already registered for an operator.";
       } else if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
         localizedError = "Incorrect email address or password. Please try again.";
@@ -144,29 +239,39 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, onGoogleSign
       <div className="relative w-full max-w-md overflow-hidden rounded-2xl bg-slate-900 border border-slate-800 text-slate-100 shadow-2xl transition-all scale-100">
         
         {/* Decorative Top Accent line */}
-        <div className="h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-600" />
+        <div className={`h-1 bg-gradient-to-r ${
+          isSandboxMode 
+            ? 'from-amber-500 via-orange-500 to-amber-600' 
+            : 'from-indigo-500 via-purple-500 to-indigo-600'
+        }`} />
 
         <div className="p-6 md:p-8">
           {/* Header */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
                 {mode === 'signin' ? (
                   <>
-                    <LogIn className="size-5 text-indigo-400" />
-                    <span>Cashier Entrance Portal</span>
+                    <LogIn className={`size-5 ${isSandboxMode ? 'text-amber-400 font-bold animate-pulse' : 'text-indigo-400'}`} />
+                    <span>
+                      {isSandboxMode ? 'Sandbox Cashier Entry' : 'Cashier Entrance Portal'}
+                    </span>
                   </>
                 ) : (
                   <>
-                    <UserPlus className="size-5 text-emerald-400" />
-                    <span>Operator Registration</span>
+                    <UserPlus className={`size-5 ${isSandboxMode ? 'text-amber-400 font-bold animate-pulse' : 'text-emerald-400'}`} />
+                    <span>
+                      {isSandboxMode ? 'Sandbox Operator Register' : 'Operator Registration'}
+                    </span>
                   </>
                 )}
               </h2>
               <p className="text-[11px] text-slate-400 mt-1">
-                {mode === 'signin' 
-                  ? 'Access the synchronized cloud POS database.' 
-                  : 'Establish a new secure terminal operator key.'}
+                {isSandboxMode 
+                  ? 'Offline local sandbox database session active.' 
+                  : mode === 'signin' 
+                    ? 'Access the synchronized cloud POS database.' 
+                    : 'Establish a new secure terminal operator key.'}
               </p>
             </div>
             <button
@@ -178,11 +283,53 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, onGoogleSign
             </button>
           </div>
 
+          {/* Sandbox Status Badge */}
+          {isSandboxMode && (
+            <div className="mb-4 px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center justify-between text-[11px] text-amber-400">
+              <span className="flex items-center gap-1.5">
+                <Compass className="size-3.5 animate-spin-slow text-amber-500" />
+                <strong>Local Sandbox Active</strong> (Bypasses restriction)
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSandboxMode(false);
+                  setError(null);
+                  setSuccessMsg(null);
+                }}
+                className="text-[10px] font-bold text-slate-400 hover:text-white underline cursor-pointer"
+              >
+                Use Firebase
+              </button>
+            </div>
+          )}
+
           {/* Feedback banners */}
           {error && (
-            <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-400 flex items-start gap-2.5">
-              <ShieldAlert className="size-4 shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-400 flex flex-col gap-2">
+              <div className="flex items-start gap-2.5">
+                <ShieldAlert className="size-4 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+              
+              {showSandboxOption && !isSandboxMode && (
+                <div className="mt-2 p-2 bg-indigo-950/40 border border-indigo-700/30 rounded-lg space-y-2">
+                  <p className="text-[10px] text-indigo-300 leading-relaxed font-sans">
+                    Enable <strong>Offline Local Sandbox</strong> mode to avoid Firebase console permission blocks & test catalog immediately!
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSandboxMode(true);
+                      setError(null);
+                      setSuccessMsg(null);
+                    }}
+                    className="w-full py-1.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-[10px] rounded-md transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className="size-3" /> Enable Offline Local Sandbox
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -239,7 +386,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, onGoogleSign
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5" htmlFor="cashier-password">
-                Password
+                Password {isSandboxMode && <span className="text-[10px] text-amber-500 font-normal">(stored locally)</span>}
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
@@ -269,40 +416,74 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, onGoogleSign
               id="btn-auth-submit"
               type="submit"
               disabled={loading}
-              className={`w-full py-2.5 px-4 bg-gradient-to-r ${
-                mode === 'signin' ? 'from-indigo-600 to-indigo-700' : 'from-emerald-600 to-emerald-700'
-              } hover:brightness-110 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-500/10 flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                loading ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
+              className={`w-full py-2.5 px-4 bg-gradient-to-r text-white font-semibold text-xs rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                isSandboxMode 
+                  ? 'from-amber-600 to-amber-700 shadow-amber-500/10 hover:brightness-110' 
+                  : mode === 'signin' 
+                    ? 'from-indigo-600 to-indigo-700 shadow-indigo-500/10 hover:brightness-110' 
+                    : 'from-emerald-600 to-emerald-700 shadow-emerald-500/10 hover:brightness-110'
+              } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               {loading ? (
                 <div className="size-4 rounded-full border-2 border-slate-400 border-t-white animate-spin"></div>
               ) : mode === 'signin' ? (
                 <>
                   <LogIn className="size-4" />
-                  <span>Start Cloud Session</span>
+                  <span>{isSandboxMode ? 'Start Sandbox Session' : 'Start Cloud Session'}</span>
                 </>
               ) : (
                 <>
                   <UserPlus className="size-4" />
-                  <span>Create Cashier Account</span>
+                  <span>{isSandboxMode ? 'Create Sandbox Account' : 'Create Cashier Account'}</span>
                 </>
               )}
             </button>
           </form>
 
           {/* Toggle Register / Sign-In buttons */}
-          <div className="mt-4 text-center">
-            <button
-              type="button"
-              id="btn-auth-mode-toggle"
-              onClick={toggleMode}
-              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors font-medium hover:underline"
-            >
-              {mode === 'signin' 
-                ? 'Don\'t have an account? Register new cashier profile' 
-                : 'Already have a cashier password? Sign In here'}
-            </button>
+          <div className="mt-4 text-center space-y-2">
+            <div>
+              <button
+                type="button"
+                id="btn-auth-mode-toggle"
+                onClick={toggleMode}
+                className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors font-medium hover:underline"
+              >
+                {mode === 'signin' 
+                  ? "Don't have an account? Register new cashier profile" 
+                  : 'Already have a cashier password? Sign In here'}
+              </button>
+            </div>
+
+            {!isSandboxMode ? (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSandboxMode(true);
+                    setError(null);
+                    setSuccessMsg(null);
+                  }}
+                  className="text-[10px] text-amber-500/80 hover:text-amber-400 font-mono flex items-center justify-center gap-1 mx-auto transition-colors"
+                >
+                  <Compass className="size-3" /> Or switch immediately to Offline Local Sandbox Mode
+                </button>
+              </div>
+            ) : (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSandboxMode(false);
+                    setError(null);
+                    setSuccessMsg(null);
+                  }}
+                  className="text-[10px] text-indigo-400 hover:text-indigo-300 font-sans flex items-center justify-center gap-1 mx-auto transition-colors"
+                >
+                  Or switch back to Standard Firebase mode
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Solid separator divider lines */}
