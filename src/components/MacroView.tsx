@@ -47,19 +47,32 @@ export default function MacroView({ presets }: MacroViewProps) {
     setChatHistory(prev => [...prev, userMsg]);
 
     try {
-      const response = await fetch('/api/gemini/generate-macro', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          description: userMsgText,
-          businessType: 'Modern Retail / Café POS',
-          sheetStructure: 'Timestamp | Transaction ID | Subtotal | Tax | Discount | Total Revenue | Payment Method'
-        })
-      });
+      let response;
+      try {
+        response = await fetch('/api/gemini/generate-macro', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            description: userMsgText,
+            businessType: 'Modern Retail / Café POS',
+            sheetStructure: 'Timestamp | Transaction ID | Subtotal | Tax | Discount | Total Revenue | Payment Method'
+          })
+        });
+      } catch (networkErr) {
+        throw new Error("API server is unreachable. Since this is running as a static site, the active AI generated backend is inactive. However, you can use the complete Local Presets Library on the left sidebar panel!");
+      }
+
+      if (response.status === 404) {
+        throw new Error("Custom AI macro generation is inactive on static hosts (like GitHub Pages). To use AI generation, host on full-stack service (like Cloud Run) or use the rich VBA Preset library on the left sidebar!");
+      }
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Server returned an error status.');
+        let errorMsg = 'Server returned an error status.';
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.error || errorMsg;
+        } catch (_) {}
+        throw new Error(errorMsg);
       }
 
       const rawJson = await response.json();
